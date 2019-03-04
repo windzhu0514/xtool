@@ -1,9 +1,12 @@
 package saz2go
 
 import (
+	"archive/zip"
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/url"
@@ -11,134 +14,144 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/windzhu0514/xtool/cmd"
+	"github.com/PuerkitoBio/goquery"
 )
 
 type saz2go struct {
-	cmd cmd.Command
-
-	structName string
-	log        *log.Logger
+	structName      string
+	structFirstChar string
+	tmplFileName    string
+	log             *log.Logger
 }
+
+var ss saz2go
 
 func New() *saz2go {
 	var s saz2go
 
-	s.cmd.Name = "saz2go"
-	s.cmd.Short = "转换fiddler为go代码"
-	s.cmd.Long = "转换fiddler为go代码"
-	s.cmd.FlagSet.StringVar(&s.structName, "s", "strucName", "specified struct name")
-	s.log = log.New(os.Stderr, "", log.Ldate|log.Ltime|log.Lshortfile)
-
-	//s.cmd.Run = s.Run
+	s.log = log.New(os.Stderr, "saz2go", log.Ldate|log.Ltime|log.Lshortfile)
 
 	return &s
 }
 
-func (s *saz2go) Cmd() cmd.Command {
-	return s.cmd
+func (s *saz2go) Bind(flagSet *flag.FlagSet) {
+	flagSet.StringVar(&s.structName, "sn", "strucName", "specified struct name")
+	flagSet.StringVar(&s.structFirstChar, "sfc", "s", "specified struct first char name")
+	flagSet.StringVar(&s.tmplFileName, "tf", "", "specified template file name")
 }
 
 func (s *saz2go) Run(args []string) error {
+	if len(args) < 1 {
+		return errors.New("please specify a file name ")
+	}
 
-	fmt.Println("参数", args)
-	fmt.Println("结构体名", s.structName)
+	fileName := args[0]
 
-	fmt.Println("呜哈哈哈哈哈")
+	r, err := zip.OpenReader(fileName)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	var pack onePackage
+	pack.PackageName = "packagename"
+	pack.StructName = "structname"
+	pack.StructNameFirstChar = "s"
+
+	if s.structName != "" {
+		pack.StructName = s.structName
+	}
+
+	if s.structFirstChar != "" {
+		pack.StructNameFirstChar = s.structFirstChar
+	}
+
+	files := make(map[string]*zip.File)
+	for _, f := range r.File {
+		files[f.Name] = f // raw/02_s.txt
+	}
+
+	indexFile, exist := files["_index.htm"]
+	if !exist {
+		s.log.Println("文件内容错误")
+		return errors.New("文件内容错误")
+	}
+
+	read, err := indexFile.Open()
+	if err != nil {
+		s.log.Println(err)
+		return err
+	}
+
+	doc, err := goquery.NewDocumentFromReader(read)
+	if err != nil {
+		s.log.Println(err)
+		return err
+	}
+
+	//jsonStrs := [][]byte{}
+	doc.Find("body table tbody tr").Each(func(i int, selection *goquery.Selection) {
+
+		reqName, ok0 := selection.Find("td a").Eq(0).Attr("href")
+		respName, ok1 := selection.Find("td a").Eq(1).Attr("href")
+
+		reqName = strings.Replace(reqName, "\\", "/", -1)
+		respName = strings.Replace(respName, "\\", "/", -1)
+		//s.log.Println(reqName, respName)
+
+		if ok0 && ok1 {
+			reqFile, exist := files[reqName]
+			if exist {
+				reqRead, err := reqFile.Open()
+				if err != nil {
+					s.log.Println(err)
+					return
+				}
+
+				if method, err := parseRequest(i, bufio.NewReader(reqRead)); err != nil {
+					s.log.Println(err)
+				} else {
+					method.StructNameFirstChar = pack.StructNameFirstChar
+					method.StructName = pack.StructName
+					pack.Methods = append(pack.Methods, method)
+				}
+
+				reqRead.Close()
+			}
+		}
+	})
+
+	var t *template.Template
+	if s.tmplFileName != "" {
+		t, err = template.ParseFiles(s.tmplFileName)
+	} else {
+		t = template.New("req")
+		t, err = t.Parse(tmplPackage)
+	}
+
+	if err != nil {
+		s.log.Println(err)
+		return err
+	}
+
+	//f, _ := os.Create("gen/gen.go")
+	goFileName := fileName
+	goFileName = strings.Replace(goFileName, ".saz", ".go", -1)
+	f, err := os.OpenFile(goFileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		s.log.Println(err)
+		return err
+	}
+	if err := t.Execute(f, pack); err != nil {
+		s.log.Println(err)
+		return err
+	}
+
+	f.Close()
+
+	fmt.Println("生成成功 :)")
 
 	return nil
-	// r, err := zip.OpenReader(flag.Arg(0))
-	// if err != nil {
-	// 	s.log.Println(err)
-	// 	return
-	// }
-	// defer r.Close()
-	//
-	// var pack onePackage
-	// pack.PackageName = "test"
-	// pack.StructName = "structName"
-	//
-	// files := make(map[string]*zip.File)
-	// for _, f := range r.File {
-	// 	files[f.Name] = f // raw/02_s.txt
-	// }
-	//
-	// indexFile, exist := files["_index.htm"]
-	// if !exist {
-	// 	s.log.Println("文件内容错误")
-	// 	return
-	// }
-	//
-	// read, err := indexFile.Open()
-	// if err != nil {
-	// 	s.log.Println(err)
-	// 	return
-	// }
-	//
-	// doc, err := goquery.NewDocumentFromReader(read)
-	// if err != nil {
-	// 	s.log.Println(err)
-	// 	return
-	// }
-	//
-	// //jsonStrs := [][]byte{}
-	// doc.Find("body table tbody tr").Each(func(i int, selection *goquery.Selection) {
-	//
-	// 	reqName, ok0 := selection.Find("td a").Eq(0).Attr("href")
-	// 	respName, ok1 := selection.Find("td a").Eq(1).Attr("href")
-	//
-	// 	reqName = strings.Replace(reqName, "\\", "/", -1)
-	// 	respName = strings.Replace(respName, "\\", "/", -1)
-	// 	//s.log.Println(reqName, respName)
-	//
-	// 	if ok0 && ok1 {
-	// 		reqFile, exist := files[reqName]
-	// 		if exist {
-	// 			reqRead, err := reqFile.Open()
-	// 			if err != nil {
-	// 				s.log.Println(err)
-	// 				return
-	// 			}
-	//
-	// 			if method, err := parseRequest(i, bufio.NewReader(reqRead)); err != nil {
-	// 				s.log.Println(err)
-	// 			} else {
-	// 				pack.Methods = append(pack.Methods, method)
-	// 			}
-	//
-	// 			reqRead.Close()
-	// 		}
-	// 	}
-	// })
-	//
-	// t := template.New("req")
-	// t, err = t.Parse(tmplPackage)
-	// if err != nil {
-	// 	s.log.Println(err)
-	// 	return
-	// }
-	//
-	// if err := os.Mkdir("gen", 0755); err != nil {
-	// 	if !os.IsExist(err) {
-	// 		s.log.Println(err)
-	// 		return
-	// 	}
-	// }
-	//
-	// //f, _ := os.Create("gen/gen.go")
-	// f, err := os.OpenFile("gen/gen.go", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
-	// if err != nil {
-	// 	s.log.Println(err)
-	// 	return
-	// }
-	// if err := t.Execute(f, pack); err != nil {
-	// 	s.log.Println(err)
-	// 	return
-	// }
-	//
-	// f.Close()
-	//
-	// fmt.Println("生成成功 :)")
 }
 
 func parseRequest(count int, rc io.Reader) (m oneMethod, err error) {
@@ -240,9 +253,10 @@ func parseRequest(count int, rc io.Reader) (m oneMethod, err error) {
 }
 
 type onePackage struct {
-	PackageName string
-	StructName  string
-	Methods     []oneMethod
+	PackageName         string
+	StructName          string
+	StructNameFirstChar string
+	Methods             []oneMethod
 }
 
 type oneMethod struct {
