@@ -6,13 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"html/template"
 	"io"
 	"log"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"text/template"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -190,7 +190,9 @@ func parseRequest(count int, rc io.Reader) (m oneMethod, err error) {
 			m.URL = URL.Scheme + "://" + URL.Host + URL.Path
 
 			// 设置函数名
-			index := strings.LastIndex(URL.Path, "/")
+			path := URL.Path
+			path = strings.TrimSuffix(path, "/")
+			index := strings.LastIndex(path, "/")
 			if index < 0 {
 				m.MethodMame = "defaultMethod" + strconv.Itoa(count)
 			} else {

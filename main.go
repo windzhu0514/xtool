@@ -38,9 +38,7 @@ func main() {
 	// 	Long:      "saz2go is a tool transform fiddler sessions to go code",
 	// }).Exe = saz2go.New()
 
-	fmt.Println(cmd.Run())
+	if err := cmd.Run(); err != nil {
+		fmt.Println(err)
+	}
 }
-
-// }
-
-// 每个功能单独定义自己的flag解析和useage
