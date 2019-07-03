@@ -2,43 +2,22 @@ package main
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/windzhu0514/cmd"
+	"github.com/spf13/cobra"
 	"github.com/windzhu0514/xtool/saz2go"
 )
 
 func main() {
-	// flag.Parse()
-	// flag.Usage = func() {
-	// 	fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
-	// 	flag.PrintDefaults()
-	// }
-	//
-	// if flag.NArg() < 1 {
-	// 	flag.Usage()
-	// 	return
-	// }
-	//
-	// switch flag.Arg(0) {
-	// case "saz2go":
-	// default:
-	// 	flag.Usage()
-	// 	return
-	// }
+	var rootCmd = &cobra.Command{
+		Use:  "xtool",
+		Long: `xtool is a tool collect`,
+	}
 
-	cmd.NewBaseCmd("xtool", &cmd.CmdPrompt{
-		UsageLine: "xtool <command>  [arguments]",
-		Short:     "xtool is a tool collect",
-		Long:      "xtool is a tool collect",
-	}).Exe = saz2go.New()
+	rootCmd.AddCommand(saz2go.Cmd)
 
-	// baseCmd.AddSubCmd("saz2go", &cmd.CmdPrompt{
-	// 	UsageLine: "saz2go [arguments]",
-	// 	Short:     "transform fiddler sessions to go code",
-	// 	Long:      "saz2go is a tool transform fiddler sessions to go code",
-	// }).Exe = saz2go.New()
-
-	if err := cmd.Run(); err != nil {
+	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"archive/zip"
 	"bufio"
 	"errors"
-	"flag"
-	"fmt"
 	"io"
 	"log"
 	"net/url"
@@ -20,33 +18,13 @@ import (
 type saz2go struct {
 	structName      string
 	structFirstChar string
+	outputFileName  string
 	tmplFileName    string
-	log             *log.Logger
 }
 
-var ss saz2go
+var ss = saz2go{}
 
-func New() *saz2go {
-	var s saz2go
-
-	s.log = log.New(os.Stderr, "saz2go", log.Ldate|log.Ltime|log.Lshortfile)
-
-	return &s
-}
-
-func (s *saz2go) Bind(flagSet *flag.FlagSet) {
-	flagSet.StringVar(&s.structName, "sn", "strucName", "specified struct name")
-	flagSet.StringVar(&s.structFirstChar, "sfc", "s", "specified struct first char name")
-	flagSet.StringVar(&s.tmplFileName, "tf", "", "specified template file name")
-}
-
-func (s *saz2go) Run(args []string) error {
-	if len(args) < 1 {
-		return errors.New("please specify a file name ")
-	}
-
-	fileName := args[0]
-
+func (s *saz2go) Run(fileName string) error {
 	r, err := zip.OpenReader(fileName)
 	if err != nil {
 		return err
@@ -55,16 +33,8 @@ func (s *saz2go) Run(args []string) error {
 
 	var pack onePackage
 	pack.PackageName = "packagename"
-	pack.StructName = "structname"
-	pack.StructNameFirstChar = "s"
-
-	if s.structName != "" {
-		pack.StructName = s.structName
-	}
-
-	if s.structFirstChar != "" {
-		pack.StructNameFirstChar = s.structFirstChar
-	}
+	pack.StructName = s.structName
+	pack.StructNameFirstChar = s.structFirstChar
 
 	files := make(map[string]*zip.File)
 	for _, f := range r.File {
@@ -73,53 +43,57 @@ func (s *saz2go) Run(args []string) error {
 
 	indexFile, exist := files["_index.htm"]
 	if !exist {
-		s.log.Println("文件内容错误")
-		return errors.New("文件内容错误")
+		return errors.New("invalid fiddler saz file format")
 	}
 
 	read, err := indexFile.Open()
 	if err != nil {
-		s.log.Println(err)
 		return err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(read)
 	if err != nil {
-		s.log.Println(err)
 		return err
 	}
 
-	//jsonStrs := [][]byte{}
-	doc.Find("body table tbody tr").Each(func(i int, selection *goquery.Selection) {
+	var parseError error
+	doc.Find("body table tbody tr").EachWithBreak(func(i int, ss *goquery.Selection) bool {
 
-		reqName, ok0 := selection.Find("td a").Eq(0).Attr("href")
-		respName, ok1 := selection.Find("td a").Eq(1).Attr("href")
-
-		reqName = strings.Replace(reqName, "\\", "/", -1)
-		respName = strings.Replace(respName, "\\", "/", -1)
-		//s.log.Println(reqName, respName)
+		reqName, ok0 := ss.Find("td a").Eq(0).Attr("href")
+		respName, ok1 := ss.Find("td a").Eq(1).Attr("href")
 
 		if ok0 && ok1 {
+			reqName = strings.Replace(reqName, "\\", "/", -1)
+			respName = strings.Replace(respName, "\\", "/", -1)
+
 			reqFile, exist := files[reqName]
 			if exist {
 				reqRead, err := reqFile.Open()
 				if err != nil {
-					s.log.Println(err)
-					return
+					parseError = err
+					return false
 				}
 
-				if method, err := parseRequest(i, bufio.NewReader(reqRead)); err != nil {
-					s.log.Println(err)
-				} else {
-					method.StructNameFirstChar = pack.StructNameFirstChar
-					method.StructName = pack.StructName
-					pack.Methods = append(pack.Methods, method)
+				method, err := s.parseRequest(i, bufio.NewReader(reqRead))
+				if err != nil {
+					parseError = err
+					return false
 				}
+
+				method.StructNameFirstChar = pack.StructNameFirstChar
+				method.StructName = pack.StructName
+				pack.Methods = append(pack.Methods, method)
 
 				reqRead.Close()
 			}
 		}
+
+		return true
 	})
+
+	if parseError != nil {
+		return parseError
+	}
 
 	var t *template.Template
 	if s.tmplFileName != "" {
@@ -130,44 +104,45 @@ func (s *saz2go) Run(args []string) error {
 	}
 
 	if err != nil {
-		s.log.Println(err)
 		return err
 	}
 
-	//f, _ := os.Create("gen/gen.go")
-	goFileName := fileName
-	goFileName = strings.Replace(goFileName, ".saz", ".go", -1)
-	f, err := os.OpenFile(goFileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	outputFileName := ss.outputFileName
+	if outputFileName == "" {
+		outputFileName = strings.Replace(fileName, ".saz", ".go", -1)
+	} else {
+		if !strings.HasSuffix(outputFileName, ".go") {
+			outputFileName += ".go"
+		}
+	}
+
+	f, err := os.OpenFile(outputFileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
-		s.log.Println(err)
 		return err
 	}
 	if err := t.Execute(f, pack); err != nil {
-		s.log.Println(err)
 		return err
 	}
 
 	f.Close()
 
-	fmt.Println("生成成功 :)")
-
 	return nil
 }
 
-func parseRequest(count int, rc io.Reader) (m oneMethod, err error) {
+func (s *saz2go) parseRequest(index int, rc io.Reader) (m oneMethod, err error) {
 	m.Heads = make(map[string]string)
 	m.Params = make(map[string]string)
 	m.RetryTimes = 3
 	m.StructName = "structName"
 	m.StructNameFirstChar = "s"
 
-	s := bufio.NewScanner(rc)
+	ss := bufio.NewScanner(rc)
 	haveReadReqLine := false
 	haveReadHeads := false
 	isParamLine := false
 
-	for s.Scan() {
-		line := s.Text()
+	for ss.Scan() {
+		line := ss.Text()
 		if !haveReadReqLine {
 			s1 := strings.Index(line, " ")
 			s2 := strings.Index(line[s1+1:], " ")
@@ -194,11 +169,16 @@ func parseRequest(count int, rc io.Reader) (m oneMethod, err error) {
 			path = strings.TrimSuffix(path, "/")
 			index := strings.LastIndex(path, "/")
 			if index < 0 {
-				m.MethodMame = "defaultMethod" + strconv.Itoa(count)
+				m.MethodMame = "defaultMethod" + strconv.Itoa(index)
 			} else {
 				lastStr := URL.Path[index+1:]
+				dotIndex := strings.LastIndex(lastStr, ".")
+				if dotIndex > 0 {
+					lastStr = lastStr[:dotIndex]
+				}
+
 				if len(lastStr) == 0 {
-					m.MethodMame = "defaultMethod" + strconv.Itoa(count)
+					m.MethodMame = "defaultMethod" + strconv.Itoa(index)
 				} else {
 					m.MethodMame = lastStr
 				}
@@ -231,6 +211,7 @@ func parseRequest(count int, rc io.Reader) (m oneMethod, err error) {
 
 				haveReadHeads = true
 			} else {
+				// 根据Content-Type判断请求数据类型
 				params, err2 := url.ParseQuery(line)
 				if err2 != nil {
 					err = err2
@@ -303,7 +284,7 @@ func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string,
 			break
 		}
 
-		buslog.GSLog.Error({{.StructNameFirstChar}}.LogPrefix+"{{.MethodMame}}请求失败 resp:%s err:%s", resp, err.Error())
+		buslog.GSLog.Error({{.StructNameFirstChar}}.LogPrefix+"{{.MethodMame}} 请求失败 resp:%s err:%s", resp, err.Error())
 
 		utils.WaitRandMs(300, 500)
 	}
