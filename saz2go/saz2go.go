@@ -6,7 +6,8 @@ import (
 	"archive/zip"
 	"bufio"
 	"errors"
-	"io"
+	"io/ioutil"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -132,59 +133,36 @@ func (s *saz2go) Run(fileName string) error {
 	return nil
 }
 
-func (s *saz2go) parseRequest(index int, rc io.Reader) (m oneMethod, err error) {
-	m.Heads = make(map[string]string)
-	m.Params = make(map[string]string)
+func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
+	request, err := http.ReadRequest(rc)
+	if err != nil {
+		return oneMethod{}, err
+	}
+
+	var m oneMethod
 	m.RetryTimes = 3
 
-	ss := bufio.NewScanner(rc)
-	isReadHeads := false
+	m.URL = request.URL.String()
+	m.MethodMame = "defaultMethod" + strconv.Itoa(index)
+	m.ReqMethod = request.Method
+	m.Heads = request.Header
+	delete(m.Heads, "Cookie")
+	delete(m.Heads, "Content-Length")
 
-	var lineIndex int
-	for ss.Scan() {
-		line := ss.Text()
-		if len(line) == 0 {
-			isReadHeads = true
-			continue
-		}
+	body, err := ioutil.ReadAll(request.Body)
+	if err == nil {
+		m.Body = string(body)
+	}
 
-		if lineIndex == 0 { // 请求头
-			reqLine := strings.Split(line, " ")
-			if len(reqLine) < 2 {
-				return oneMethod{}, errInvalidFormat
-			}
-
-			m.ReqMethod = strings.Title(strings.ToLower(reqLine[0]))
-			m.URL = reqLine[1]
-			m.MethodMame = "defaultMethod" + strconv.Itoa(index)
-		} else if lineIndex > 0 && !isReadHeads {
-			kv := strings.Split(line, ": ")
-			if kv[0] != "Cookie" && kv[0] != "Content-Length" {
-				m.Heads[kv[0]] = kv[1]
-			}
-		} else {
-			contentType, ok := m.Heads["Content-Type"]
-			if !ok {
-				return oneMethod{}, errInvalidFormat
-			}
-
-			if contentType == "application/x-www-form-urlencoded" {
-				var params url.Values
-				params, err = url.ParseQuery(line)
-				if err != nil {
-					return oneMethod{}, errInvalidFormat
-				}
-
-				for k := range params {
-					m.Params[k] = params.Get(k)
-				}
-			} else {
-				m.Body = line
-			}
+	contentType := m.Heads.Get("Content-Type")
+	if contentType == "application/x-www-form-urlencoded" {
+		m.Params, err = url.ParseQuery(m.Body)
+		if err != nil {
+			return m, err
 		}
 	}
 
-	return
+	return m, nil
 }
 
 type onePackage struct {
@@ -201,8 +179,8 @@ type oneMethod struct {
 	RetryTimes          int
 	ReqMethod           string
 	URL                 string
-	Heads               map[string]string
-	Params              map[string]string
+	Heads               http.Header
+	Params              url.Values
 	Body                string
 }
 
