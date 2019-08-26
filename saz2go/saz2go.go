@@ -1,3 +1,5 @@
+// TODO:支持所有功能模块的生成
+// TODO:支持json转结构体 生成赋值代码
 package saz2go
 
 import (
@@ -5,7 +7,6 @@ import (
 	"bufio"
 	"errors"
 	"io"
-	"log"
 	"net/url"
 	"os"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 )
+
+var errInvalidFormat = errors.New("invalid fiddler saz file format")
 
 type saz2go struct {
 	structName      string
@@ -43,7 +46,7 @@ func (s *saz2go) Run(fileName string) error {
 
 	indexFile, exist := files["_index.htm"]
 	if !exist {
-		return errors.New("invalid fiddler saz file format")
+		return errInvalidFormat
 	}
 
 	read, err := indexFile.Open()
@@ -133,101 +136,50 @@ func (s *saz2go) parseRequest(index int, rc io.Reader) (m oneMethod, err error) 
 	m.Heads = make(map[string]string)
 	m.Params = make(map[string]string)
 	m.RetryTimes = 3
-	m.StructName = "structName"
-	m.StructNameFirstChar = "s"
 
 	ss := bufio.NewScanner(rc)
-	haveReadReqLine := false
-	haveReadHeads := false
-	isParamLine := false
+	isReadHeads := false
 
+	var lineIndex int
 	for ss.Scan() {
 		line := ss.Text()
-		if !haveReadReqLine {
-			s1 := strings.Index(line, " ")
-			s2 := strings.Index(line[s1+1:], " ")
-			if s1 < 0 || s2 < 0 {
-				log.Println("解析请求头失败")
-				err = errors.New("解析请求头失败")
-				return
-			}
-			s2 += s1 + 1
-			m.ReqMethod = strings.Title(strings.ToLower(line[:s1]))
-
-			URI := line[s1+1 : s2]
-
-			URL, err2 := url.Parse(URI)
-			if err2 != nil {
-				err = err2
-				return
-			}
-
-			m.URL = URL.Scheme + "://" + URL.Host + URL.Path
-
-			// 设置函数名
-			path := URL.Path
-			path = strings.TrimSuffix(path, "/")
-			index := strings.LastIndex(path, "/")
-			if index < 0 {
-				m.MethodMame = "defaultMethod" + strconv.Itoa(index)
-			} else {
-				lastStr := URL.Path[index+1:]
-				dotIndex := strings.LastIndex(lastStr, ".")
-				if dotIndex > 0 {
-					lastStr = lastStr[:dotIndex]
-				}
-
-				if len(lastStr) == 0 {
-					m.MethodMame = "defaultMethod" + strconv.Itoa(index)
-				} else {
-					m.MethodMame = lastStr
-				}
-			}
-
-			// 解析参数
-			params, err2 := url.ParseQuery(URL.RawQuery)
-			if err2 != nil {
-				err = err2
-
-				log.Println("解析参数失败")
-				haveReadReqLine = true
-				continue
-			}
-
-			for k := range params {
-				m.Params[k] = params.Get(k)
-			}
-
-			haveReadReqLine = true
+		if len(line) == 0 {
+			isReadHeads = true
 			continue
 		}
 
-		if len(line) > 0 {
-			if !isParamLine {
-				headSlice := strings.Split(line, ": ")
-				if headSlice[0] != "Cookie" && headSlice[0] != "Content-Length" {
-					m.Heads[headSlice[0]] = headSlice[1]
-				}
+		if lineIndex == 0 { // 请求头
+			reqLine := strings.Split(line, " ")
+			if len(reqLine) < 2 {
+				return oneMethod{}, errInvalidFormat
+			}
 
-				haveReadHeads = true
-			} else {
-				// 根据Content-Type判断请求数据类型
-				params, err2 := url.ParseQuery(line)
-				if err2 != nil {
-					err = err2
+			m.ReqMethod = strings.Title(strings.ToLower(reqLine[0]))
+			m.URL = reqLine[1]
+			m.MethodMame = "defaultMethod" + strconv.Itoa(index)
+		} else if lineIndex > 0 && !isReadHeads {
+			kv := strings.Split(line, ": ")
+			if kv[0] != "Cookie" && kv[0] != "Content-Length" {
+				m.Heads[kv[0]] = kv[1]
+			}
+		} else {
+			contentType, ok := m.Heads["Content-Type"]
+			if !ok {
+				return oneMethod{}, errInvalidFormat
+			}
 
-					log.Println("解析参数失败")
-					continue
+			if contentType == "application/x-www-form-urlencoded" {
+				var params url.Values
+				params, err = url.ParseQuery(line)
+				if err != nil {
+					return oneMethod{}, errInvalidFormat
 				}
 
 				for k := range params {
 					m.Params[k] = params.Get(k)
 				}
-			}
-		} else {
-			if haveReadHeads && haveReadReqLine { // 下一行是参数行
-				isParamLine = true
-				continue
+			} else {
+				m.Body = line
 			}
 		}
 	}
@@ -251,6 +203,7 @@ type oneMethod struct {
 	URL                 string
 	Heads               map[string]string
 	Params              map[string]string
+	Body                string
 }
 
 var tmplPackage = `
@@ -262,9 +215,16 @@ type {{.StructName}} struct {
 
 {{range .Methods}}
 func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string, err error) {
-	
-	for i := 0; i < conf.GSystemConfig.ReTryTimes; i++ {
-		req := httpclient.{{.ReqMethod}}("{{.URL}}")
+	{{if .Params}}
+	params := url.Values{}
+	{{range $key, $value :=  .Params -}}
+		params.Add("{{$key}}", "{{$value}}")
+	{{end -}}
+	{{end}}	
+
+	for i := 0; i < .ReTryTimes; i++ {
+		{{ if .ReqMethod }}
+		req := hihttp.{{.ReqMethod}}("{{.URL}}")
 		{{range $key, $value :=  .Heads -}}
 		req.Header("{{$key}}", "{{$value}}")
 		{{end -}}
@@ -273,11 +233,6 @@ func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string,
 		req.Param("{{$key}}", "{{$value}}")
 		{{end -}}
 		{{end}}
-		req.SetCookieJar({{.StructNameFirstChar}}.ci.CICookieJar)
-
-		if {{.StructNameFirstChar}}.ci.UseProxy {
-			req.SetAuthProxy({{.StructNameFirstChar}}.ci.ProxyUser, {{.StructNameFirstChar}}.ci.ProxyPass, {{.StructNameFirstChar}}.ci.ProxyIp, {{.StructNameFirstChar}}.ci.ProxyPort)
-		}
 
 		resp, err = req.String()
 		if err == nil {
