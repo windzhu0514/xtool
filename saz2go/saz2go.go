@@ -1,11 +1,15 @@
 // TODO:支持所有功能模块的生成
 // TODO:支持json转结构体 生成赋值代码
+// TODO：生成站点工程 生成单个文件（请求流程） 只生成方法
 package saz2go
 
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -14,6 +18,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/ChimeraCoder/gojson"
 	"github.com/PuerkitoBio/goquery"
 )
 
@@ -143,24 +148,40 @@ func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
 	m.RetryTimes = 3
 
 	m.URL = request.URL.String()
+	m.Params=request.URL.Query()
+	// 正斜杠后面的单词作为方法名 大小写统一为title风格
 	m.MethodMame = "defaultMethod" + strconv.Itoa(index)
-	m.ReqMethod = request.Method
+	m.ReqMethod = strings.Title(strings.ToLower(request.Method))
+
 	m.Heads = request.Header
 	delete(m.Heads, "Cookie")
 	delete(m.Heads, "Content-Length")
+	delete(m.Heads, "Dnt")
+	delete(m.Heads, "Upgrade-Insecure-Requests")
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err == nil {
 		m.Body = string(body)
 	}
+	if json.Valid(body){
+		m.IsJson=true
+		s, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, "name", "main", []string{"json"}, false, true)
+		if err!=nil{
+			fmt.Println(err)
+		}
+		s=s[bytes.Index(s,[]byte("type")):]
+	}
 
-	contentType := m.Heads.Get("Content-Type")
-	if contentType == "application/x-www-form-urlencoded" {
-		m.Params, err = url.ParseQuery(m.Body)
-		if err != nil {
-			return m, err
+	contentTypes := m.Heads.Values("Content-Type")
+	for _, ct := range contentTypes {
+		if strings.Contains(ct,"application/x-www-form-urlencoded") {
+			m.Params, err = url.ParseQuery(m.Body)
+			if err != nil {
+				return m, err
+			}
 		}
 	}
+
 
 	return m, nil
 }
@@ -181,7 +202,10 @@ type oneMethod struct {
 	URL                 string
 	Heads               http.Header
 	Params              url.Values
+
 	Body                string
+	IsJson bool
+	IsForm bool
 }
 
 var tmplPackage = `
@@ -193,36 +217,56 @@ type {{.StructName}} struct {
 
 {{range .Methods}}
 func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string, err error) {
-	{{if .Params}}
-	params := url.Values{}
-	{{range $key, $value :=  .Params -}}
-		params.Add("{{$key}}", "{{$value}}")
-	{{end -}}
-	{{end}}	
+	for i := 0; i < conf.GSystemConfig.ReTryTimes; i++ {
+        {{if .ReqMethod -}}
+		req := httpclient.{{.ReqMethod}}("{{.URL}}")
+		{{- end}}
+		{{- range $key, $value :=  .Heads}}
+		req.Header("{{$key}}", "{{index $value 0}}")
+		{{- end}}
+	    {{if .Params}}
+		{{- range $key, $value :=  .Params}}
+		req.Param("{{$key}}", "{{index $value 0}}")
+		{{- end}}
+		{{- end}}
+		
+		req.SetCookieJar({{.StructNameFirstChar}}.ci.CICookieJar)
 
-	for i := 0; i < .ReTryTimes; i++ {
-		{{ if .ReqMethod }}
-		req := hihttp.{{.ReqMethod}}("{{.URL}}")
-		{{range $key, $value :=  .Heads -}}
-		req.Header("{{$key}}", "{{$value}}")
-		{{end -}}
-		{{if .Params}}
-		{{range $key, $value :=  .Params -}}
-		req.Param("{{$key}}", "{{$value}}")
-		{{end -}}
-		{{end}}
-
+        oldProxyIP := ""
+		if {{.StructNameFirstChar}}.ci.UseProxy {
+			proxyInfo, status := proxyMgr.GProxyMgr.Get()
+			oldProxyIP = proxyInfo.ProxyIP
+			if status {
+				req.SetAuthProxy(proxyInfo.ProxyUser, proxyInfo.ProxyPass, proxyInfo.ProxyIP, proxyInfo.ProxyPort)
+				airlog.GSLog.Info({{.StructNameFirstChar}}.logPrefix+" siteid=%d, ProxyID=%s, proxyip=%s:[采用新版代理]",
+					common.CSAIR, proxyInfo.ProxyID, proxyInfo.ProxyIP)
+			} else {
+				airlog.GSLog.Info({{.StructNameFirstChar}}.logPrefix + "新版代理获取失败")
+				utils.WaitRandMs(300, 500)
+				continue
+			}
+		}
 		resp, err = req.String()
-		if err == nil {
-			break
+		code, _ := req.GetStatusCode()
+		if code >= http.StatusBadRequest || utils.IsProxyTimeout(err) {
+			airlog.GSLog.Debug(l.logPrefix+" 返回结果异常 statuscode:%d", code)
+			utils.WaitRandMs(1500, 2000)
+			if {{.StructNameFirstChar}}.ci.UseProxy {
+				proxyMgr.GProxyMgr.RedialProxyIP(oldProxyIP)
+			}
+			continue
 		}
 
-		buslog.GSLog.Error({{.StructNameFirstChar}}.LogPrefix+"{{.MethodMame}} 请求失败 resp:%s err:%s", resp, err.Error())
+		if err != nil {
+			airlog.GSLog.Error({{.StructNameFirstChar}}.logPrefix+"{{.MethodMame}} 请求失败：%+v", err.Error())
+			utils.WaitRandMs(1500, 2000)
+			continue
+		}
 
-		utils.WaitRandMs(300, 500)
+		break
 	}
 
-	return 
+	return resp, err
 }	
 {{end}}
 `
