@@ -1,6 +1,4 @@
-// TODO:支持所有功能模块的生成
 // TODO:支持json转结构体 生成赋值代码
-// TODO：生成站点工程 生成单个文件（请求流程） 只生成方法
 package saz2go
 
 import (
@@ -148,7 +146,7 @@ func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
 	m.RetryTimes = 3
 
 	m.URL = request.URL.String()
-	m.Params=request.URL.Query()
+	m.Params = request.URL.Query()
 	// 正斜杠后面的单词作为方法名 大小写统一为title风格
 	m.MethodMame = "defaultMethod" + strconv.Itoa(index)
 	m.ReqMethod = strings.Title(strings.ToLower(request.Method))
@@ -163,25 +161,24 @@ func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
 	if err == nil {
 		m.Body = string(body)
 	}
-	if json.Valid(body){
-		m.IsJson=true
+	if json.Valid(body) {
+		m.IsJson = true
 		s, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, "name", "main", []string{"json"}, false, true)
-		if err!=nil{
+		if err != nil {
 			fmt.Println(err)
 		}
-		s=s[bytes.Index(s,[]byte("type")):]
+		s = s[bytes.Index(s, []byte("type")):]
 	}
 
 	contentTypes := m.Heads.Values("Content-Type")
 	for _, ct := range contentTypes {
-		if strings.Contains(ct,"application/x-www-form-urlencoded") {
+		if strings.Contains(ct, "application/x-www-form-urlencoded") {
 			m.Params, err = url.ParseQuery(m.Body)
 			if err != nil {
 				return m, err
 			}
 		}
 	}
-
 
 	return m, nil
 }
@@ -203,7 +200,7 @@ type oneMethod struct {
 	Heads               http.Header
 	Params              url.Values
 
-	Body                string
+	Body   string
 	IsJson bool
 	IsForm bool
 }
@@ -239,7 +236,7 @@ func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string,
 			if status {
 				req.SetAuthProxy(proxyInfo.ProxyUser, proxyInfo.ProxyPass, proxyInfo.ProxyIP, proxyInfo.ProxyPort)
 				airlog.GSLog.Info({{.StructNameFirstChar}}.logPrefix+" siteid=%d, ProxyID=%s, proxyip=%s:[采用新版代理]",
-					common.CSAIR, proxyInfo.ProxyID, proxyInfo.ProxyIP)
+					common.AIR9C, proxyInfo.ProxyID, proxyInfo.ProxyIP)
 			} else {
 				airlog.GSLog.Info({{.StructNameFirstChar}}.logPrefix + "新版代理获取失败")
 				utils.WaitRandMs(300, 500)
