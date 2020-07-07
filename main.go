@@ -2,14 +2,19 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/windzhu0514/xtool/config"
 	"github.com/windzhu0514/xtool/saz2go"
 )
 
 func main() {
+	if err := config.LoadConfig(); err != nil {
+		fmt.Println(err)
+		return
+	}
+
 	var rootCmd = &cobra.Command{
 		Use:  "xtool",
 		Long: `xtool is a tool collect`,
@@ -19,6 +24,6 @@ func main() {
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return
 	}
 }

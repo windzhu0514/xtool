@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/ChimeraCoder/gojson"
 	"github.com/PuerkitoBio/goquery"
+
+	"github.com/windzhu0514/xtool/config"
 )
 
 var errInvalidFormat = errors.New("invalid fiddler saz file format")
@@ -31,7 +34,7 @@ type saz2go struct {
 
 var ss = saz2go{}
 
-func (s *saz2go) Run(fileName string) error {
+func (s *saz2go) Convert(fileName string) error {
 	r, err := zip.OpenReader(fileName)
 	if err != nil {
 		return err
@@ -136,8 +139,115 @@ func (s *saz2go) Run(fileName string) error {
 	return nil
 }
 
-func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
-	request, err := http.ReadRequest(rc)
+func (s *saz2go) Parse(fileName string) error {
+	return nil
+}
+
+func (s *saz2go) parse(fileName string) error {
+	r, err := zip.OpenReader(fileName)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	files := make(map[string]*zip.File)
+	for _, f := range r.File {
+		files[f.Name] = f // raw/02_s.txt
+	}
+
+	indexFile, exist := files["_index.htm"]
+	if !exist {
+		return errInvalidFormat
+	}
+
+	reader, err := indexFile.Open()
+	if err != nil {
+		return err
+	}
+
+	doc, err := goquery.NewDocumentFromReader(reader)
+	if err != nil {
+		return err
+	}
+
+	var pack onePackage
+	pack.PackageName = "saz2go"
+	pack.StructName = s.structName
+	pack.StructNameFirstChar = s.structFirstChar
+
+	var parseError error
+	doc.Find("body table tbody tr").EachWithBreak(func(i int, ss *goquery.Selection) bool {
+		reqFileName, ok0 := ss.Find("td").Eq(0).Find("a").Eq(0).Attr("href")
+		respFileName, ok1 := ss.Find("td").Eq(0).Find("a").Eq(1).Attr("href")
+		if ok0 && ok1 {
+			reqFileName = strings.ReplaceAll(reqFileName, "\\", "/")
+			respFileName = strings.ReplaceAll(respFileName, "\\", "/")
+
+			reqFile, exist := files[reqFileName]
+			if exist {
+				reqReader, err := reqFile.Open()
+				if err != nil {
+					parseError = err
+					return false
+				}
+
+				method, err := s.parseRequest(i, reqReader)
+				if err != nil {
+					parseError = err
+					return false
+				}
+
+				method.StructNameFirstChar = pack.StructNameFirstChar
+				method.StructName = pack.StructName
+				pack.Methods = append(pack.Methods, method)
+
+				reqReader.Close()
+			}
+		}
+
+		return true
+	})
+
+	if parseError != nil {
+		return parseError
+	}
+
+	var t *template.Template
+	if s.tmplFileName != "" {
+		t, err = template.ParseFiles(s.tmplFileName)
+	} else {
+		t = template.New("req")
+		t, err = t.Parse(tmplPackage)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	outputFileName := ss.outputFileName
+	if outputFileName == "" {
+		outputFileName = strings.Replace(fileName, ".saz", ".go", -1)
+	} else {
+		if !strings.HasSuffix(outputFileName, ".go") {
+			outputFileName += ".go"
+		}
+	}
+
+	f, err := os.OpenFile(outputFileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		return err
+	}
+	if err := t.Execute(f, pack); err != nil {
+		return err
+	}
+
+	f.Close()
+
+	return nil
+}
+
+func (s *saz2go) parseRequest(methodIndex int, r io.Reader) (oneMethod, error) {
+	request, err := http.ReadRequest(bufio.NewReader(r))
 	if err != nil {
 		return oneMethod{}, err
 	}
@@ -147,9 +257,8 @@ func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
 
 	m.URL = request.URL.String()
 	m.Params = request.URL.Query()
-	// 正斜杠后面的单词作为方法名 大小写统一为title风格
-	m.MethodMame = "defaultMethod" + strconv.Itoa(index)
-	m.ReqMethod = strings.Title(strings.ToLower(request.Method))
+	m.MethodMame = s.methodName(methodIndex, request.URL.Path)
+	m.HttpMethod = strings.Title(strings.ToLower(request.Method))
 
 	m.Heads = request.Header
 	delete(m.Heads, "Cookie")
@@ -157,10 +266,15 @@ func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
 	delete(m.Heads, "Dnt")
 	delete(m.Heads, "Upgrade-Insecure-Requests")
 
-	body, err := ioutil.ReadAll(request.Body)
-	if err == nil {
-		m.Body = string(body)
+	for _, c := range config.Cfg.SAZ2go.Cookie.Remove {
+		delete(m.Heads, c)
 	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		return m, err
+	}
+
 	if json.Valid(body) {
 		m.IsJson = true
 		s, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, "name", "main", []string{"json"}, false, true)
@@ -178,9 +292,24 @@ func (s *saz2go) parseRequest(index int, rc *bufio.Reader) (oneMethod, error) {
 				return m, err
 			}
 		}
-	}
+	}else if
 
 	return m, nil
+}
+
+// 正斜杠后面的单词作为方法名 大小写统一为title风格
+func (s *saz2go) methodName(methodIndex int, path string) string {
+	path = strings.TrimSuffix(path, "/")
+	index := strings.LastIndex(path, "/")
+	if index > 0 {
+		name := path[index:]
+		if len(name) > 0 {
+			name = strings.ToLower(name[:1]) + name[1:]
+		}
+		return name
+	}
+
+	return "defaultMethod" + strconv.Itoa(methodIndex)
 }
 
 type onePackage struct {
@@ -195,7 +324,7 @@ type oneMethod struct {
 	StructName          string
 	MethodMame          string
 	RetryTimes          int
-	ReqMethod           string
+	HttpMethod          string
 	URL                 string
 	Heads               http.Header
 	Params              url.Values

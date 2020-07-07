@@ -1,0 +1,5 @@
+saz2go:
+  cookie:
+    delCookies:
+      - anyCookie
+sazparse:
