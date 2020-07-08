@@ -261,6 +261,7 @@ func (s *saz2go) parseRequest(methodIndex int, r io.Reader) (oneMethod, error) {
 	m.HttpMethod = strings.Title(strings.ToLower(request.Method))
 
 	m.Heads = request.Header
+	m.Heads.Add("Host", request.URL.Host)
 	delete(m.Heads, "Cookie")
 	delete(m.Heads, "Content-Length")
 	delete(m.Heads, "Dnt")
@@ -292,12 +293,12 @@ func (s *saz2go) parseRequest(methodIndex int, r io.Reader) (oneMethod, error) {
 				return m, err
 			}
 		}
-	}else if
+	}
 
 	return m, nil
 }
 
-// 正斜杠后面的单词作为方法名 大小写统一为title风格
+// 正斜杠后面的单词作为方法名，首字母小写
 func (s *saz2go) methodName(methodIndex int, path string) string {
 	path = strings.TrimSuffix(path, "/")
 	index := strings.LastIndex(path, "/")
