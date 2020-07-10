@@ -37,16 +37,22 @@ func parseBody(body io.Reader, isRequest bool) (string, string, error) {
 }
 
 func chooseParser(body []byte, isRequest bool) Parser {
-	if json.Valid(body) {
-		return jsonBodyParser{}
-	}
-
 	decryptCfg := config.Cfg.SAZ2go.Request.Decrypt
 	if !isRequest {
 		decryptCfg = config.Cfg.SAZ2go.Response.Decrypt
 	}
 
-	return cryptionParser{}
+	var err error
+	body, err = crypto.Decrypt(decryptCfg.AlgoName, body)
+	if err != nil {
+		return rawParser{}
+	}
+
+	if json.Valid(body) {
+		return jsonBodyParser{}
+	}
+
+	return nil
 }
 
 func fromBase64(in []byte) []byte {
@@ -60,6 +66,10 @@ func fromBase64(in []byte) []byte {
 }
 
 type rawParser struct {
+}
+
+func (p rawParser) Parse(body []byte) (string, string, error) {
+	return "", "", nil
 }
 
 type formURLEncodeParser struct {
@@ -79,15 +89,4 @@ func (p jsonBodyParser) Parse(body []byte) (string, string, error) {
 	structAssign := ""
 
 	return string(structDefine), structAssign, nil
-}
-
-type cryptionParser struct {
-	decryptCfg config.Decrypt
-}
-
-func (p cryptionParser) Parse(body []byte) (string, string, error) {
-	plainTxt, err := crypto.Decrypt(p.decryptCfg.AlgoName, body)
-	if err != nil {
-		return "", "", err
-	}
 }
