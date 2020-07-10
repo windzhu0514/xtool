@@ -1,5 +1,11 @@
 saz2go:
-  cookie:
-    delCookies:
+  head:
+    del:
       - anyCookie
+  body:
+    request:
+      decrypt:
+
+    response:
+      decrypt:
 sazparse:

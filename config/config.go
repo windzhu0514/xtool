@@ -10,12 +10,23 @@ import (
 
 var Cfg = &config{}
 
+type Decrypt struct {
+	AlgoName  string
+	Key       string // private key or key
+	IV        string
+	PublicKey string
+}
+
 type config struct {
 	SAZ2go struct {
 		Cookie struct {
 			Remove []string
 		}
 		Request struct {
+			Decrypt
+		}
+		Response struct {
+			Decrypt
 		}
 	}
 	SAZParse struct{}
