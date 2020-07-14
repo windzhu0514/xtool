@@ -5,9 +5,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,10 +15,10 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/ChimeraCoder/gojson"
 	"github.com/PuerkitoBio/goquery"
 
 	"github.com/windzhu0514/xtool/config"
+	"github.com/windzhu0514/xtool/crypto"
 )
 
 var errInvalidFormat = errors.New("invalid fiddler saz file format")
@@ -35,74 +33,9 @@ type saz2go struct {
 var ss = saz2go{}
 
 func (s *saz2go) Convert(fileName string) error {
-	r, err := zip.OpenReader(fileName)
+	pack, err := s.parse(fileName, false)
 	if err != nil {
 		return err
-	}
-	defer r.Close()
-
-	var pack onePackage
-	pack.PackageName = "packagename"
-	pack.StructName = s.structName
-	pack.StructNameFirstChar = s.structFirstChar
-
-	files := make(map[string]*zip.File)
-	for _, f := range r.File {
-		files[f.Name] = f // raw/02_s.txt
-	}
-
-	indexFile, exist := files["_index.htm"]
-	if !exist {
-		return errInvalidFormat
-	}
-
-	read, err := indexFile.Open()
-	if err != nil {
-		return err
-	}
-
-	doc, err := goquery.NewDocumentFromReader(read)
-	if err != nil {
-		return err
-	}
-
-	var parseError error
-	doc.Find("body table tbody tr").EachWithBreak(func(i int, ss *goquery.Selection) bool {
-
-		reqName, ok0 := ss.Find("td a").Eq(0).Attr("href")
-		respName, ok1 := ss.Find("td a").Eq(1).Attr("href")
-
-		if ok0 && ok1 {
-			reqName = strings.Replace(reqName, "\\", "/", -1)
-			respName = strings.Replace(respName, "\\", "/", -1)
-
-			reqFile, exist := files[reqName]
-			if exist {
-				reqRead, err := reqFile.Open()
-				if err != nil {
-					parseError = err
-					return false
-				}
-
-				method, err := s.parseRequest(i, bufio.NewReader(reqRead))
-				if err != nil {
-					parseError = err
-					return false
-				}
-
-				method.StructNameFirstChar = pack.StructNameFirstChar
-				method.StructName = pack.StructName
-				pack.Methods = append(pack.Methods, method)
-
-				reqRead.Close()
-			}
-		}
-
-		return true
-	})
-
-	if parseError != nil {
-		return parseError
 	}
 
 	var t *template.Template
@@ -140,13 +73,18 @@ func (s *saz2go) Convert(fileName string) error {
 }
 
 func (s *saz2go) Parse(fileName string) error {
-	return nil
-}
-
-func (s *saz2go) parse(fileName string) error {
-	r, err := zip.OpenReader(fileName)
+	pack, err := s.parse(fileName, true)
 	if err != nil {
 		return err
+	}
+
+	return s.save2file(pack, fileName)
+}
+
+func (s *saz2go) parse(fileName string, isParse bool) (*onePackage, error) {
+	r, err := zip.OpenReader(fileName)
+	if err != nil {
+		return nil, err
 	}
 	defer r.Close()
 
@@ -157,17 +95,17 @@ func (s *saz2go) parse(fileName string) error {
 
 	indexFile, exist := files["_index.htm"]
 	if !exist {
-		return errInvalidFormat
+		return nil, errInvalidFormat
 	}
 
 	reader, err := indexFile.Open()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var pack onePackage
@@ -183,6 +121,7 @@ func (s *saz2go) parse(fileName string) error {
 			reqFileName = strings.ReplaceAll(reqFileName, "\\", "/")
 			respFileName = strings.ReplaceAll(respFileName, "\\", "/")
 
+			var m oneMethod
 			reqFile, exist := files[reqFileName]
 			if exist {
 				reqReader, err := reqFile.Open()
@@ -191,71 +130,111 @@ func (s *saz2go) parse(fileName string) error {
 					return false
 				}
 
-				method, err := s.parseRequest(i, reqReader)
+				err = s.parseRequest(&m, reqReader, i, isParse)
 				if err != nil {
 					parseError = err
 					return false
 				}
 
-				method.StructNameFirstChar = pack.StructNameFirstChar
-				method.StructName = pack.StructName
-				pack.Methods = append(pack.Methods, method)
+				m.StructNameFirstChar = pack.StructNameFirstChar
+				m.StructName = pack.StructName
 
 				reqReader.Close()
 			}
+
+			respFile, exist := files[respFileName]
+			if exist {
+				respReader, err := respFile.Open()
+				if err != nil {
+					parseError = err
+					return false
+				}
+
+				err = s.parseResponse(&m, respReader, i, isParse)
+				if err != nil {
+					parseError = err
+					return false
+				}
+
+				respReader.Close()
+			}
+
+			pack.Methods = append(pack.Methods, m)
 		}
 
 		return true
 	})
 
 	if parseError != nil {
-		return parseError
+		return nil, parseError
 	}
 
-	var t *template.Template
-	if s.tmplFileName != "" {
-		t, err = template.ParseFiles(s.tmplFileName)
-	} else {
-		t = template.New("req")
-		t, err = t.Parse(tmplPackage)
+	return &pack, nil
+}
+
+func (s *saz2go) save2file(pack *onePackage, fileName string) error {
+	if pack == nil {
+		return errors.New("package not have method")
 	}
 
+	var buf bytes.Buffer
+	for _, v := range pack.Methods {
+		buf.WriteString(v.URL)
+		buf.WriteString("\n\n")
+		buf.WriteString(v.ReqBody)
+		buf.WriteString("\n\n")
+		buf.WriteString(v.RespBody)
+		buf.WriteString("\n\n\n")
+	}
+
+	fileName = strings.TrimSuffix(fileName, ".saz")
+	fileName += ".txt"
+
+	saveFile, err := os.OpenFile(fileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 
-	outputFileName := ss.outputFileName
-	if outputFileName == "" {
-		outputFileName = strings.Replace(fileName, ".saz", ".go", -1)
-	} else {
-		if !strings.HasSuffix(outputFileName, ".go") {
-			outputFileName += ".go"
-		}
-	}
-
-	f, err := os.OpenFile(outputFileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
-	if err != nil {
-		return err
-	}
-	if err := t.Execute(f, pack); err != nil {
-		return err
-	}
-
-	f.Close()
+	saveFile.Write(buf.Bytes())
+	saveFile.Close()
 
 	return nil
 }
 
-func (s *saz2go) parseRequest(methodIndex int, r io.Reader) (oneMethod, error) {
+func (s *saz2go) parseRequest(m *oneMethod, r io.Reader, methodIndex int, isParse bool) error {
 	request, err := http.ReadRequest(bufio.NewReader(r))
 	if err != nil {
-		return oneMethod{}, err
+		return err
 	}
 
-	var m oneMethod
-	m.RetryTimes = 3
-
 	m.URL = request.URL.String()
+	data, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		return err
+	}
+
+	data = fromBase64(data)
+	decryptCfg := config.Cfg.SAZ2go.Request.Decrypt
+	if decryptCfg.AlgoName != "" {
+		data, err = crypto.Decrypt(decryptCfg, data)
+		if err != nil {
+			return nil
+		}
+	}
+
+	rawBody, dataDefine, dataAssign, err := parseBody(data, true)
+	if err != nil {
+		return err
+	}
+
+	m.ReqBody = string(rawBody)
+	m.ReqDataDefine = dataDefine
+	m.ReqDataAssign = dataAssign
+
+	if isParse {
+		return nil
+	}
+
 	m.Params = request.URL.Query()
 	m.MethodMame = s.methodName(methodIndex, request.URL.Path)
 	m.HttpMethod = strings.Title(strings.ToLower(request.Method))
@@ -271,31 +250,41 @@ func (s *saz2go) parseRequest(methodIndex int, r io.Reader) (oneMethod, error) {
 		delete(m.Heads, c)
 	}
 
-	body, err := ioutil.ReadAll(request.Body)
+	return nil
+}
+
+func (s *saz2go) parseResponse(m *oneMethod, r io.Reader, methodIndex int, isParse bool) error {
+	response, err := http.ReadResponse(bufio.NewReader(r), nil)
 	if err != nil {
-		return m, err
+		return err
+	}
+	for _, v := range response.Header.Values("Content-Type") {
+		if strings.Contains(v, "text/html") {
+			return nil
+		}
 	}
 
-	if json.Valid(body) {
-		m.IsJson = true
-		s, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, "name", "main", []string{"json"}, false, true)
+	data, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+
+	data = fromBase64(data)
+	decryptCfg := config.Cfg.SAZ2go.Response.Decrypt
+	if decryptCfg.AlgoName != "" {
+		data, err = crypto.Decrypt(decryptCfg, data)
 		if err != nil {
-			fmt.Println(err)
-		}
-		s = s[bytes.Index(s, []byte("type")):]
-	}
-
-	contentTypes := m.Heads.Values("Content-Type")
-	for _, ct := range contentTypes {
-		if strings.Contains(ct, "application/x-www-form-urlencoded") {
-			m.Params, err = url.ParseQuery(m.Body)
-			if err != nil {
-				return m, err
-			}
+			return nil
 		}
 	}
 
-	return m, nil
+	m.RespBody = string(data)
+
+	if isParse {
+		return nil
+	}
+
+	return nil
 }
 
 // 正斜杠后面的单词作为方法名，首字母小写
@@ -324,15 +313,17 @@ type oneMethod struct {
 	StructNameFirstChar string
 	StructName          string
 	MethodMame          string
-	RetryTimes          int
 	HttpMethod          string
 	URL                 string
 	Heads               http.Header
 	Params              url.Values
 
-	Body   string
-	IsJson bool
-	IsForm bool
+	ReqBody        string // 经过解密的原始body
+	RespBody       string // 经过解密的原始body
+	ReqDataDefine  interface{}
+	ReqDataAssign  string
+	RespDataDefine interface{}
+	RespDataAssign string
 }
 
 var tmplPackage = `

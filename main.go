@@ -21,6 +21,7 @@ func main() {
 	}
 
 	rootCmd.AddCommand(saz2go.Cmd)
+	rootCmd.AddCommand(saz2go.CmdParse)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

@@ -11,10 +11,9 @@ import (
 var Cfg = &config{}
 
 type Decrypt struct {
-	AlgoName  string
-	Key       string // private key or key
-	IV        string
-	PublicKey string
+	AlgoName string
+	Key      string // public key,private key or key
+	IV       string
 }
 
 type config struct {

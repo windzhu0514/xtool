@@ -4,55 +4,30 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"io"
-	"io/ioutil"
+	"net/url"
 
 	"github.com/ChimeraCoder/gojson"
-
-	"github.com/windzhu0514/xtool/config"
-	"github.com/windzhu0514/xtool/crypto"
 )
 
 type Parser interface {
-	Parse(body []byte) (string, string, error)
+	Parse(body []byte, isParse bool) ([]byte, interface{}, string, error)
 }
 
-func parseBody(body io.Reader, isRequest bool) (string, string, error) {
-	data, err := ioutil.ReadAll(body)
-	if err != nil {
-		return "", "", err
-	}
-
-	data = fromBase64(data)
-
-	parser := chooseParser(data, isRequest)
-	return parser.Parse(data)
-
-	// 默认明文解析 配置的加解密则进行对应的加解密
-	// data, err = fromBase64(data)
-	// if err != nil {
-	// 	return err
-	// }
+func parseBody(body []byte, isParse bool) ([]byte, interface{}, string, error) {
+	parser := chooseParser(body)
+	return parser.Parse(body, isParse)
 }
 
-func chooseParser(body []byte, isRequest bool) Parser {
-	decryptCfg := config.Cfg.SAZ2go.Request.Decrypt
-	if !isRequest {
-		decryptCfg = config.Cfg.SAZ2go.Response.Decrypt
-	}
-
-	var err error
-	body, err = crypto.Decrypt(decryptCfg.AlgoName, body)
-	if err != nil {
-		return rawParser{}
-	}
-
+func chooseParser(body []byte) Parser {
 	if json.Valid(body) {
 		return jsonBodyParser{}
 	}
 
-	return nil
+	if _, err := url.ParseQuery(string(body)); err == nil {
+		return formURLEncodeParser{}
+	}
+
+	return rawParser{}
 }
 
 func fromBase64(in []byte) []byte {
@@ -68,25 +43,45 @@ func fromBase64(in []byte) []byte {
 type rawParser struct {
 }
 
-func (p rawParser) Parse(body []byte) (string, string, error) {
-	return "", "", nil
+func (p rawParser) Parse(body []byte, isParse bool) ([]byte, interface{}, string, error) {
+	return body, nil, "", nil
 }
 
 type formURLEncodeParser struct {
 }
 
+func (p formURLEncodeParser) Parse(body []byte, isParse bool) ([]byte, interface{}, string, error) {
+	raw, err := url.QueryUnescape(string(body))
+	if err != nil {
+		return body, nil, "", err
+	}
+
+	if isParse {
+		return []byte(raw), nil, "", err
+	}
+
+	params, err := url.ParseQuery(string(body))
+	if err != nil {
+		return []byte(raw), nil, "", err
+	}
+
+	return []byte(raw), params, "", nil
+}
+
 type jsonBodyParser struct {
 }
 
-func (p jsonBodyParser) Parse(body []byte) (string, string, error) {
+func (p jsonBodyParser) Parse(body []byte, isParse bool) ([]byte, interface{}, string, error) {
+	if isParse {
+		return body, nil, "", nil
+	}
+
 	structDefine, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, "name", "main", []string{"json"}, false, true)
 	if err != nil {
-		fmt.Println(err)
+		return body, nil, "", err
 	}
 
 	structDefine = structDefine[bytes.Index(structDefine, []byte("type")):]
-
 	structAssign := ""
-
-	return string(structDefine), structAssign, nil
+	return body, string(structDefine), structAssign, nil
 }
