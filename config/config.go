@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -11,24 +12,25 @@ import (
 var Cfg = &config{}
 
 type Decrypt struct {
-	AlgoName string
-	Key      string // public key,private key or key
-	IV       string
+	AlgoName string `yaml:"algoName"`
+	Key      string `yaml:"key"` // public key,private key or key
+	IV       string `yaml:"iv"`
 }
 
 type config struct {
-	SAZ2go struct {
-		Cookie struct {
-			Remove []string
+	SAZ struct {
+		Head struct {
+			Del []string
 		}
-		Request struct {
-			Decrypt
-		}
-		Response struct {
-			Decrypt
+		Body struct {
+			Request struct {
+				Decrypt Decrypt
+			}
+			Response struct {
+				Decrypt Decrypt
+			}
 		}
 	}
-	SAZParse struct{}
 }
 
 func programPath() string {
@@ -36,6 +38,7 @@ func programPath() string {
 }
 
 func LoadConfig() error {
+	fmt.Println(programPath())
 	data, err := ioutil.ReadFile(programPath() + "/xtool.yaml")
 	if err != nil {
 		return err

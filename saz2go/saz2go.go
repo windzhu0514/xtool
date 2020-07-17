@@ -18,7 +18,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"github.com/windzhu0514/xtool/config"
-	"github.com/windzhu0514/xtool/crypto"
 )
 
 var errInvalidFormat = errors.New("invalid fiddler saz file format")
@@ -180,10 +179,16 @@ func (s *saz2go) save2file(pack *onePackage, fileName string) error {
 	var buf bytes.Buffer
 	for _, v := range pack.Methods {
 		buf.WriteString(v.URL)
-		buf.WriteString("\n\n")
-		buf.WriteString(v.ReqBody)
-		buf.WriteString("\n\n")
-		buf.WriteString(v.RespBody)
+		if v.ReqBody != "" {
+			buf.WriteString("\n\n")
+			buf.WriteString(v.ReqBody)
+		}
+
+		if v.RespBody != "" {
+			buf.WriteString("\n\n")
+			buf.WriteString(v.RespBody)
+		}
+
 		buf.WriteString("\n\n\n")
 	}
 
@@ -208,21 +213,15 @@ func (s *saz2go) parseRequest(m *oneMethod, r io.Reader, methodIndex int, isPars
 	}
 
 	m.URL = request.URL.String()
-	data, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		return err
+	contentType := request.Header.Get("Content-Type")
+
+	parser := bodyParser{
+		cfg:         config.Cfg.SAZ.Body.Request.Decrypt,
+		contentType: contentType,
+		isParse:     isParse,
 	}
 
-	data = fromBase64(data)
-	decryptCfg := config.Cfg.SAZ2go.Request.Decrypt
-	if decryptCfg.AlgoName != "" {
-		data, err = crypto.Decrypt(decryptCfg, data)
-		if err != nil {
-			return nil
-		}
-	}
-
-	rawBody, dataDefine, dataAssign, err := parseBody(data, true)
+	rawBody, dataDefine, dataAssign, err := parser.Parse(request.Body)
 	if err != nil {
 		return err
 	}
@@ -246,7 +245,7 @@ func (s *saz2go) parseRequest(m *oneMethod, r io.Reader, methodIndex int, isPars
 	delete(m.Heads, "Dnt")
 	delete(m.Heads, "Upgrade-Insecure-Requests")
 
-	for _, c := range config.Cfg.SAZ2go.Cookie.Remove {
+	for _, c := range config.Cfg.SAZ.Head.Del {
 		delete(m.Heads, c)
 	}
 
@@ -269,10 +268,10 @@ func (s *saz2go) parseResponse(m *oneMethod, r io.Reader, methodIndex int, isPar
 		return err
 	}
 
-	data = fromBase64(data)
-	decryptCfg := config.Cfg.SAZ2go.Response.Decrypt
+	data, _ = fromBase64(data)
+	decryptCfg := config.Cfg.SAZ.Body.Response.Decrypt
 	if decryptCfg.AlgoName != "" {
-		data, err = crypto.Decrypt(decryptCfg, data)
+		data, err = decrypt(decryptCfg, data)
 		if err != nil {
 			return nil
 		}

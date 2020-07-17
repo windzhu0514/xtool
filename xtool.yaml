@@ -1,11 +1,12 @@
-saz2go:
+saz:
   head:
     del:
       - anyCookie
   body:
     request:
       decrypt:
-
+        algoName: TripleDES/CBC/PKCS5Padding
+        key: spring20140530airlines!)
+        iv: 12345678
     response:
       decrypt:
-sazparse:
