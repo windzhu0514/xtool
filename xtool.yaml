@@ -5,8 +5,11 @@ saz:
   body:
     request:
       decrypt:
-        algoName: TripleDES/CBC/PKCS5Padding
-        key: spring20140530airlines!)
-        iv: 12345678
+        algoName:
+        key:
+        iv:
     response:
       decrypt:
+        algoName:
+        key:
+        iv:

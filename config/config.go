@@ -38,8 +38,9 @@ func programPath() string {
 }
 
 func LoadConfig() error {
-	fmt.Println(programPath())
-	data, err := ioutil.ReadFile(programPath() + "/xtool.yaml")
+	cfgFilePath := filepath.Join(programPath(), "xtool.yaml")
+	fmt.Println("read config file:" + cfgFilePath)
+	data, err := ioutil.ReadFile(cfgFilePath)
 	if err != nil {
 		return err
 	}

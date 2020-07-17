@@ -35,7 +35,8 @@ func (p *bodyParser) Parse(body io.ReadCloser) (
 		return nil, nil, "", err
 	}
 
-	if data, ok := fromBase64(data); ok {
+	var ok bool
+	if data, ok = fromBase64(data); ok {
 		if p.cfg.AlgoName != "" {
 			data, err = decrypt(p.cfg, data)
 			if err != nil {
@@ -60,10 +61,6 @@ func (p *bodyParser) ChooseParser() Parser {
 			cfg:     p.cfg,
 			isParse: p.isParse,
 		}
-	}
-
-	if _, err := url.ParseQuery(string(p.bodyData)); err == nil {
-		return formURLEncodeParser{}
 	}
 
 	return rawParser{}

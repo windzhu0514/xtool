@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -111,6 +110,9 @@ func (s *saz2go) parse(fileName string, isParse bool) (*onePackage, error) {
 	pack.PackageName = "saz2go"
 	pack.StructName = s.structName
 	pack.StructNameFirstChar = s.structFirstChar
+	if pack.StructNameFirstChar == "" {
+		pack.StructNameFirstChar = pack.StructName[:1]
+	}
 
 	var parseError error
 	doc.Find("body table tbody tr").EachWithBreak(func(i int, ss *goquery.Selection) bool {
@@ -257,27 +259,23 @@ func (s *saz2go) parseResponse(m *oneMethod, r io.Reader, methodIndex int, isPar
 	if err != nil {
 		return err
 	}
-	for _, v := range response.Header.Values("Content-Type") {
-		if strings.Contains(v, "text/html") {
-			return nil
-		}
+
+	contentType := response.Header.Get("Content-Type")
+
+	parser := bodyParser{
+		cfg:         config.Cfg.SAZ.Body.Response.Decrypt,
+		contentType: contentType,
+		isParse:     isParse,
 	}
 
-	data, err := ioutil.ReadAll(response.Body)
+	rawBody, dataDefine, dataAssign, err := parser.Parse(response.Body)
 	if err != nil {
 		return err
 	}
 
-	data, _ = fromBase64(data)
-	decryptCfg := config.Cfg.SAZ.Body.Response.Decrypt
-	if decryptCfg.AlgoName != "" {
-		data, err = decrypt(decryptCfg, data)
-		if err != nil {
-			return nil
-		}
-	}
-
-	m.RespBody = string(data)
+	m.RespBody = string(rawBody)
+	m.ReqDataDefine = dataDefine
+	m.ReqDataAssign = dataAssign
 
 	if isParse {
 		return nil
@@ -291,7 +289,7 @@ func (s *saz2go) methodName(methodIndex int, path string) string {
 	path = strings.TrimSuffix(path, "/")
 	index := strings.LastIndex(path, "/")
 	if index > 0 {
-		name := path[index:]
+		name := path[index+1:]
 		if len(name) > 0 {
 			name = strings.ToLower(name[:1]) + name[1:]
 		}
@@ -335,8 +333,8 @@ type {{.StructName}} struct {
 {{range .Methods}}
 func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string, err error) {
 	for i := 0; i < conf.GSystemConfig.ReTryTimes; i++ {
-        {{if .ReqMethod -}}
-		req := httpclient.{{.ReqMethod}}("{{.URL}}")
+        {{if .HttpMethod -}}
+		req := httpclient.{{.HttpMethod}}("{{.URL}}")
 		{{- end}}
 		{{- range $key, $value :=  .Heads}}
 		req.Header("{{$key}}", "{{index $value 0}}")

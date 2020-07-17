@@ -8,7 +8,7 @@ import (
 
 func init() {
 	Cmd.Flags().StringVar(&ss.structName, "n", "strucName", "struct name")
-	Cmd.Flags().StringVar(&ss.structFirstChar, "m", "", "method receiver name,default name first char of  struct name")
+	Cmd.Flags().StringVar(&ss.structFirstChar, "m", "", "method receiver name,default name first char of struct name")
 	Cmd.Flags().StringVar(&ss.outputFileName, "o", "", "output file name")
 	Cmd.Flags().StringVar(&ss.tmplFileName, "t", "", "template file name")
 }
@@ -19,7 +19,7 @@ var Cmd = &cobra.Command{
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
-			fmt.Println("specify file to convert")
+			fmt.Println("ERROR:specify file to convert")
 			return
 		}
 
