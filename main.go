@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -14,6 +16,14 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+
+	f, err := os.OpenFile(config.LogFilename(), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	log.SetOutput(f)
 
 	var rootCmd = &cobra.Command{
 		Use:  "xtool",

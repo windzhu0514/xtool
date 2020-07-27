@@ -37,6 +37,10 @@ func programPath() string {
 	return filepath.Dir(os.Args[0])
 }
 
+func LogFilename() string {
+	return filepath.Join(programPath(), "log.txt")
+}
+
 func LoadConfig() error {
 	cfgFilePath := filepath.Join(programPath(), "xtool.yaml")
 	fmt.Println("read config file:" + cfgFilePath)

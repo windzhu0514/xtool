@@ -215,12 +215,15 @@ func (s *saz2go) parseRequest(m *oneMethod, r io.Reader, methodIndex int, isPars
 	}
 
 	m.URL = request.URL.String()
+	m.MethodMame = s.methodName(methodIndex, request.URL.Path)
 	contentType := request.Header.Get("Content-Type")
 
 	parser := bodyParser{
 		cfg:         config.Cfg.SAZ.Body.Request.Decrypt,
 		contentType: contentType,
+		isRequest:   true,
 		isParse:     isParse,
+		methodMame:  m.MethodMame,
 	}
 
 	rawBody, dataDefine, dataAssign, err := parser.Parse(request.Body)
@@ -237,7 +240,6 @@ func (s *saz2go) parseRequest(m *oneMethod, r io.Reader, methodIndex int, isPars
 	}
 
 	m.Params = request.URL.Query()
-	m.MethodMame = s.methodName(methodIndex, request.URL.Path)
 	m.HttpMethod = strings.Title(strings.ToLower(request.Method))
 
 	m.Heads = request.Header
@@ -265,7 +267,9 @@ func (s *saz2go) parseResponse(m *oneMethod, r io.Reader, methodIndex int, isPar
 	parser := bodyParser{
 		cfg:         config.Cfg.SAZ.Body.Response.Decrypt,
 		contentType: contentType,
+		isRequest:   false,
 		isParse:     isParse,
+		methodMame:  m.MethodMame,
 	}
 
 	rawBody, dataDefine, dataAssign, err := parser.Parse(response.Body)
@@ -274,8 +278,8 @@ func (s *saz2go) parseResponse(m *oneMethod, r io.Reader, methodIndex int, isPar
 	}
 
 	m.RespBody = string(rawBody)
-	m.ReqDataDefine = dataDefine
-	m.ReqDataAssign = dataAssign
+	m.RespDataDefine = dataDefine
+	m.RespDataAssign = dataAssign
 
 	if isParse {
 		return nil
@@ -327,12 +331,25 @@ var tmplPackage = `
 package {{.PackageName}}
 
 type {{.StructName}} struct {
-	
+	ci ConnectInfo
+}
+
+type ConnectInfo struct {
+	CICookieJar http.CookieJar
 }
 
 {{range .Methods}}
+{{if .ReqDataDefine -}}
+{{.ReqDataDefine}}
+{{- end}}
+{{if .RespDataDefine -}}
+{{.RespDataDefine}}
+{{end}}
 func ({{.StructNameFirstChar}} *{{.StructName}}) {{.MethodMame}}() (resp string, err error) {
-	for i := 0; i < conf.GSystemConfig.ReTryTimes; i++ {
+	{{- if .ReqDataAssign}}
+	{{.ReqDataAssign}}
+	{{end}}
+	for i := 0; i < 3; i++ {
         {{if .HttpMethod -}}
 		req := httpclient.{{.HttpMethod}}("{{.URL}}")
 		{{- end}}

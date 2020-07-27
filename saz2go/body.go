@@ -13,6 +13,7 @@ import (
 	"github.com/ChimeraCoder/gojson"
 	"github.com/windzhu0514/gocrypto"
 	"github.com/windzhu0514/xtool/config"
+	"github.com/windzhu0514/xtool/saz2go/structassgin"
 )
 
 type Parser interface {
@@ -22,7 +23,9 @@ type Parser interface {
 type bodyParser struct {
 	cfg         config.Decrypt
 	contentType string
+	isRequest   bool
 	isParse     bool
+	methodMame  string
 
 	bodyData []byte
 }
@@ -32,7 +35,14 @@ func (p *bodyParser) Parse(body io.ReadCloser) (
 
 	data, err := ioutil.ReadAll(body)
 	if err != nil {
+		body.Close()
 		return nil, nil, "", err
+	}
+
+	body.Close()
+
+	if len(data) == 0 {
+		return nil, nil, "", nil
 	}
 
 	var ok bool
@@ -53,7 +63,15 @@ func (p *bodyParser) Parse(body io.ReadCloser) (
 
 func (p *bodyParser) ChooseParser() Parser {
 	if strings.Contains(p.contentType, "application/json") || json.Valid(p.bodyData) {
-		return jsonBodyParser{}
+		structName := p.methodMame
+		if p.isRequest {
+			structName += "Data"
+		} else {
+			structName += "Resp"
+		}
+		return jsonBodyParser{
+			structName: structName,
+		}
 	}
 
 	if strings.Contains(p.contentType, "application/x-www-form-urlencoded") {
@@ -121,11 +139,12 @@ func (p formURLEncodeParser) Parse(body []byte) ([]byte, interface{}, string, er
 		return []byte(strings.Join(formData, "&")), nil, "", nil
 	}
 
-	return body, params, "", nil
+	return body, "", "", nil
 }
 
 type jsonBodyParser struct {
-	isParse bool
+	isParse    bool
+	structName string
 }
 
 func (p jsonBodyParser) Parse(body []byte) ([]byte, interface{}, string, error) {
@@ -133,14 +152,18 @@ func (p jsonBodyParser) Parse(body []byte) ([]byte, interface{}, string, error) 
 		return body, nil, "", nil
 	}
 
-	structDefine, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, "name", "main", []string{"json"}, false, true)
+	structDefine, err := gojson.Generate(bytes.NewReader(body), gojson.ParseJson, p.structName, "main", []string{"json"}, false, true)
 	if err != nil {
 		return body, nil, "", err
 	}
 
 	structDefine = structDefine[bytes.Index(structDefine, []byte("type")):]
-	structAssign := ""
-	return body, string(structDefine), structAssign, nil
+	structAssign, err := structassgin.Generate(body, p.structName)
+	if err != nil {
+		return body, nil, "", err
+	}
+
+	return body, string(structDefine), string(structAssign), nil
 }
 
 func decrypt(cfg config.Decrypt, data []byte) ([]byte, error) {
